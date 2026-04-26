@@ -1,5 +1,6 @@
 appId: br.com.deliveryflows.gestor
 productName: Delivery Flows Gestor
+copyright: Copyright © 2026 Delivery Flows. Todos os direitos reservados.
 directories:
   buildResources: build
 files:
@@ -12,6 +13,8 @@ files:
 asarUnpack:
   - resources/**
 win:
+  target: nsis
+  icon: build/icon.ico
   executableName: gestor-delivery-flows
 nsis:
   artifactName: ${name}-${version}-setup.${ext}

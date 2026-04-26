@@ -1,10 +1,10 @@
 {
   "name": "gestor-delivery-flows",
-  "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "version": "1.0.0", 
+  "description": "Sistema Inteligente de Pedidos e Impressão",
   "main": "./out/main/index.js",
-  "author": "example.com",
-  "homepage": "https://electron-vite.org",
+  "author": "Delivery Flows",
+  "homepage": "https://deliveryflows.com.br",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
