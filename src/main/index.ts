@@ -132,7 +132,9 @@ ipcMain.handle('get-categories', () => {
   return []
 })
 
-// MOTOR DE IMPRESSÃO
+// ==========================================
+// MOTOR DE IMPRESSÃO BLINDADO
+// ==========================================
 ipcMain.on('print-order', (_event, { html, target }) => {
   const routes = loadConfig()
   let printerName: string | undefined = undefined
@@ -147,18 +149,23 @@ ipcMain.on('print-order', (_event, { html, target }) => {
     }
   }
 
-  console.log(`Imprimindo ticket de '${target}' na impressora: ${printerName || 'Padrão'}`)
+  const printWindow = new BrowserWindow({
+    show: false,
+    width: 300,
+    webPreferences: { nodeIntegration: false }
+  })
 
-  const printWindow = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false } })
   printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
 
   printWindow.webContents.on('did-finish-load', () => {
     printWindow.webContents.print({
-      silent: true, 
-      deviceName: printerName, 
-      // Garante que o Electron remove cabeçalhos do Windows e não mexe na escala
-      margins: { marginType: 'none' },
-      printBackground: true,
-      scaleFactor: 100 
+      silent: true,
+      deviceName: printerName,
+      margins: { marginType: 'none' }, // Remove cabeçalhos
+      // O SEGREDO CONTRA O ENCOLHIMENTO: Força a folha a ter 80mm!
+      // Largura: 80mm (80000 mícrons) | Altura: 300mm (300000 mícrons)
+      pageSize: { width: 80000, height: 300000 },
+      printBackground: true
     }, () => printWindow.close())
   })
+})
