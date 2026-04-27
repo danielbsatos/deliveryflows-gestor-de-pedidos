@@ -156,7 +156,9 @@ ipcMain.on('print-order', (_event, { html, target }) => {
     printWindow.webContents.print({
       silent: true, 
       deviceName: printerName, 
-      margins: { marginType: 'none' } 
+      // Garante que o Electron remove cabeçalhos do Windows e não mexe na escala
+      margins: { marginType: 'none' },
+      printBackground: true,
+      scaleFactor: 100 
     }, () => printWindow.close())
   })
-})
