@@ -2,24 +2,32 @@ import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import fs from 'fs'
+import type { PrintRoute } from '../shared/types'
+import { cache } from './lib/cache'
 import icon from '../../resources/icon.png?asset'
 
-// ==========================================
-// 1. CAMINHOS DOS ARQUIVOS INVISÍVEIS NO PC
-// ==========================================
+/** TTL do cache de impressoras: 5 minutos */
+const PRINTERS_CACHE_TTL = 5 * 60 * 1000
+/** TTL do cache de configuração: 10 minutos */
+const CONFIG_CACHE_TTL = 10 * 60 * 1000
+/** TTL do cache de categorias: 10 minutos */
+const CATEGORIES_CACHE_TTL = 10 * 60 * 1000
+
 const configPath = join(app.getPath('userData'), 'printer-config.json')
 const categoriesPath = join(app.getPath('userData'), 'store-categories.json')
 
-function loadConfig() {
+/** Carrega as rotas de impressão do arquivo JSON no diretório userData. */
+function loadConfig(): PrintRoute[] {
   try {
-    if (fs.existsSync(configPath)) return JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-  } catch (e) { console.error(e) }
+    if (fs.existsSync(configPath)) {
+      return JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    }
+  } catch (e) {
+    console.error(e)
+  }
   return []
 }
 
-// ==========================================
-// 2. CRIAÇÃO DAS JANELAS NATIVAS
-// ==========================================
 let settingsWindow: BrowserWindow | null = null
 
 function createWindow(): void {
@@ -27,16 +35,15 @@ function createWindow(): void {
     width: 1280,
     height: 800,
     show: false,
-    autoHideMenuBar: false, // Menu visível
+    autoHideMenuBar: false,
     title: 'Delivery Flows - Gestor de Pedidos',
     icon: icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
+      contextIsolation: true
     }
   })
 
-  // MENU SUPERIOR NATIVO DO APLICATIVO
   const menu = Menu.buildFromTemplate([
     {
       label: '⚙️ Hardware e Impressoras',
@@ -56,12 +63,10 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // CARREGA O SITE OFICIAL
   mainWindow.loadURL('https://app.deliveryflows.com.br/admin/login')
 }
 
-// JANELA DAS CONFIGURAÇÕES
-function openSettingsWindow() {
+function openSettingsWindow(): void {
   if (settingsWindow) {
     settingsWindow.focus()
     return
@@ -70,84 +75,117 @@ function openSettingsWindow() {
   settingsWindow = new BrowserWindow({
     width: 700,
     height: 750,
-    title: 'Configurações de Impressão - Delivery Flows', // Define o nome na barra
-    autoHideMenuBar: true, // Esconde menus de sistema (File, Edit, etc)
-    icon: icon, // Se já tiver o ícone importado
+    title: 'Configurações de Impressão - Delivery Flows',
+    autoHideMenuBar: true,
+    icon: icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
+      contextIsolation: true
     }
   })
 
-  // Remove o menu de sistema apenas desta janela para ficar mais limpo
   settingsWindow.setMenu(null)
 
-  // Carrega o nosso React Local (App.tsx)
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     settingsWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     settingsWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  settingsWindow.on('closed', () => { settingsWindow = null })
+  settingsWindow.on('closed', () => {
+    settingsWindow = null
+  })
 }
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('br.com.deliveryflows.gestor')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
   createWindow()
-  app.on('activate', function () { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+  app.on('activate', function () {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
 })
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})
 
-// ==========================================
-// 3. SUPERPODERES: ROTAS, CATEGORIAS E HARDWARE
-// ==========================================
-
-// Lista impressoras físicas
 ipcMain.handle('get-printers', async (event) => {
-  return await event.sender.getPrintersAsync()
+  const cached = cache.get<Electron.PrinterInfo[]>('printers')
+  if (cached) return cached
+  const printers = await event.sender.getPrintersAsync()
+  cache.set('printers', printers, PRINTERS_CACHE_TTL)
+  return printers
 })
 
-// Salva e Lê Configurações de Rotas
-ipcMain.handle('get-config', () => loadConfig())
-ipcMain.handle('save-config', (_, newConfig) => {
+ipcMain.handle('get-config', () => {
+  const cached = cache.get<PrintRoute[]>('config')
+  if (cached) return cached
+  const config = loadConfig()
+  cache.set('config', config, CONFIG_CACHE_TTL)
+  return config
+})
+
+ipcMain.handle('save-config', (_event, newConfig: PrintRoute[]) => {
   fs.writeFileSync(configPath, JSON.stringify(newConfig))
+  cache.set('config', newConfig, CONFIG_CACHE_TTL)
   return true
 })
 
-// Salva e Lê as Categorias vindas do Site Web
-ipcMain.on('sync-categories', (_event, categories) => {
+ipcMain.on('sync-categories', (_event, categories: unknown[]) => {
   try {
     fs.writeFileSync(categoriesPath, JSON.stringify(categories))
+    cache.delete('categories')
   } catch (error) {
     console.error('Erro ao salvar categorias:', error)
   }
 })
+
 ipcMain.handle('get-categories', () => {
+  const cached = cache.get<Record<string, unknown>[]>('categories')
+  if (cached) return cached
   try {
-    if (fs.existsSync(categoriesPath)) return JSON.parse(fs.readFileSync(categoriesPath, 'utf-8'))
-  } catch (e) { console.error(e) }
+    if (fs.existsSync(categoriesPath)) {
+      const data = JSON.parse(fs.readFileSync(categoriesPath, 'utf-8'))
+      cache.set('categories', data, CATEGORIES_CACHE_TTL)
+      return data
+    }
+  } catch (e) {
+    console.error(e)
+  }
   return []
 })
 
-// ==========================================
-// MOTOR DE IMPRESSÃO BLINDADO
-// ==========================================
-ipcMain.on('print-order', (_event, { html, target }) => {
-  const routes = loadConfig()
-  let printerName: string | undefined = undefined
+/** Valida o payload recebido do renderer via IPC `print-order`.
+ *  Rejeita requisições sem HTML ou sem destino (target). */
+function validatePrintPayload(payload: unknown): payload is { html: string; target: string } {
+  if (!payload || typeof payload !== 'object') return false
+  const p = payload as Record<string, unknown>
+  return typeof p.html === 'string' && p.html.length > 0 && typeof p.target === 'string'
+}
 
-  if (Array.isArray(routes)) {
-    const routeInfo = routes.find((r: any) => r.name.toLowerCase() === (target || '').toLowerCase())
-    if (routeInfo && routeInfo.printer !== '') {
-      printerName = routeInfo.printer
-    } else {
-      const defaultRoute = routes.find((r: any) => r.id === 'default')
-      if (defaultRoute && defaultRoute.printer !== '') printerName = defaultRoute.printer
-    }
+/** Percorre as rotas configuradas e retorna o nome da impressora
+ *  correspondente ao setor (target). Se não encontrar, tenta a rota padrão. */
+function findPrinterName(routes: PrintRoute[], target: string): string | undefined {
+  const routeInfo = routes.find((r) => r.name.toLowerCase() === (target || '').toLowerCase())
+  if (routeInfo && routeInfo.printer !== '') {
+    return routeInfo.printer
   }
+  const defaultRoute = routes.find((r) => r.id === 'default')
+  if (defaultRoute && defaultRoute.printer !== '') {
+    return defaultRoute.printer
+  }
+  return undefined
+}
+
+ipcMain.on('print-order', (_event, payload: unknown) => {
+  if (!validatePrintPayload(payload)) {
+    console.error('print-order: payload inválido recebido', payload)
+    return
+  }
+
+  const routes = loadConfig()
+  const printerName = findPrinterName(routes, payload.target)
 
   const printWindow = new BrowserWindow({
     show: false,
@@ -155,17 +193,18 @@ ipcMain.on('print-order', (_event, { html, target }) => {
     webPreferences: { nodeIntegration: false }
   })
 
-  printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(payload.html)}`)
 
   printWindow.webContents.on('did-finish-load', () => {
-    printWindow.webContents.print({
-      silent: true,
-      deviceName: printerName,
-      margins: { marginType: 'none' }, // Remove cabeçalhos
-      // O SEGREDO CONTRA O ENCOLHIMENTO: Força a folha a ter 80mm!
-      // Largura: 80mm (80000 mícrons) | Altura: 300mm (300000 mícrons)
-      pageSize: { width: 80000, height: 300000 },
-      printBackground: true
-    }, () => printWindow.close())
+    printWindow.webContents.print(
+      {
+        silent: true,
+        deviceName: printerName,
+        margins: { marginType: 'none' },
+        pageSize: { width: 80000, height: 300000 },
+        printBackground: true
+      },
+      () => printWindow.close()
+    )
   })
 })
